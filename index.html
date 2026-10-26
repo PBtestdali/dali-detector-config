@@ -86,8 +86,8 @@
       <small>Repeats the occupancy broadcast while a local sensor remains active.</small>
     </label>
     <label>Minimum peer RSSI (dBm)
-      <input id="minRssi" type="number" min="-110" max="-50" step="1">
-      <small>Median RSSI threshold for the first 15 valid occupancy advertisements received from each BLE address. Peers below this threshold are ignored until reboot.</small>
+      <input id="minRssi" type="number" min="-127" max="-50" step="1">
+      <small>Messages from a detector are relayed while their signal reaches this threshold. After 15 messages, a detector whose median signal is below it is ignored until reboot. -127 dBm accepts every detector.</small>
     </label>
     <label>BLE requested transmit power (dBm)
       <input id="txPower" type="number" min="-12" max="20" step="1">
@@ -133,7 +133,7 @@
       vacancy: [0, 254], fadeIn: [0, 60], hold: [1, 3600],
       fadeOut: [0, 60], sensitivity: [20, 1600],
       radioEnabled: [0, 1], radioRepeat: [250, 10000],
-      minRssi: [-110, -50], txPower: [-12, 20]
+      minRssi: [-127, -50], txPower: [-12, 20]
     };
     // DALI GPIO bytes (offsets 19-20) are not editable: they are sent back exactly
     // as read, and the firmware rejects any change made over BLE.
