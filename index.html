@@ -42,16 +42,16 @@
       <input id="vacancy" type="number" min="0" max="254" step="1">
       <small>DALI output level after the hold time expires.</small>
     </label>
-    <label>Fade-in duration (ms)
-      <input id="fadeIn" type="number" min="0" max="60000" step="1">
+    <label>Fade-in duration (s)
+      <input id="fadeIn" type="number" min="0" max="60" step="1">
       <small>Software fade duration when entering the occupancy profile.</small>
     </label>
     <label>Hold time (seconds)
       <input id="hold" type="number" min="1" max="3600" step="1">
       <small>Time to keep the occupancy profile after the last local or radio detection.</small>
     </label>
-    <label>Fade-out duration (ms)
-      <input id="fadeOut" type="number" min="0" max="60000" step="1">
+    <label>Fade-out duration (s)
+      <input id="fadeOut" type="number" min="0" max="60" step="1">
       <small>Software fade duration when returning to the vacancy profile.</small>
     </label>
     </div>
@@ -79,7 +79,7 @@
     <div class="fields">
     <label>Enable radio occupancy relay (BLE LE Coded)
       <select id="radioEnabled"><option value="0">Disabled</option><option value="1">Enabled</option></select>
-      <small>Enables BLE coded occupancy relay and the PHY 1M configuration service.</small>
+      <small>Sends and receives occupancy messages to and from nearby detectors (BLE LE Coded). The configuration service is not affected.</small>
     </label>
     <label>Radio occupancy repeat period (ms)
       <input id="radioRepeat" type="number" min="250" max="10000" step="1">
@@ -103,6 +103,7 @@
     const SERVICE_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a901";
     const SETTINGS_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a902";
     const SETTINGS_LENGTH = 28;
+    const SETTINGS_VERSION = 2; // fades in seconds
     const byId = id => document.getElementById(id);
     const status = message => { byId("status").textContent = message; };
     let device;
@@ -129,8 +130,8 @@
     };
     const limits = {
       sensorMode: [0, 1], activeHigh: [0, 1], occupancy: [0, 254],
-      vacancy: [0, 254], fadeIn: [0, 60000], hold: [1, 3600],
-      fadeOut: [0, 60000], sensitivity: [20, 1600],
+      vacancy: [0, 254], fadeIn: [0, 60], hold: [1, 3600],
+      fadeOut: [0, 60], sensitivity: [20, 1600],
       radioEnabled: [0, 1], radioRepeat: [250, 10000],
       minRssi: [-110, -50], txPower: [-12, 20]
     };
@@ -141,7 +142,7 @@
     function parseSettings(buffer) {
       if (buffer.byteLength !== SETTINGS_LENGTH) throw new Error(`Unexpected settings length: ${buffer.byteLength} bytes.`);
       const view = new DataView(buffer);
-      if (view.getUint8(0) !== 1) throw new Error("Unsupported settings version.");
+      if (view.getUint8(0) !== SETTINGS_VERSION) throw new Error("Unsupported settings version: update the detector firmware.");
       const values = {
         sensorMode: view.getUint8(1), activeHigh: view.getUint8(2),
         occupancy: view.getUint8(3), vacancy: view.getUint8(4),
@@ -174,7 +175,7 @@
     function serializeSettings(values) {
       const buffer = new ArrayBuffer(SETTINGS_LENGTH);
       const view = new DataView(buffer);
-      view.setUint8(0, 1);
+      view.setUint8(0, SETTINGS_VERSION);
       view.setUint8(1, values.sensorMode);
       view.setUint8(2, values.activeHigh);
       view.setUint8(3, values.occupancy);
