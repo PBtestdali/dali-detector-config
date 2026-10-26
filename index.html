@@ -32,19 +32,8 @@
   <p id="device" class="notice"></p>
 
   <fieldset>
-    <legend>DALI profile and sensor mode</legend>
+    <legend>DALI profile</legend>
     <div class="fields">
-    <label>Sensor input mode
-      <select id="sensorMode"><option value="0">Digital inputs with GPIO interrupts</option><option value="1">Two analog inputs (ESP32-C3 ADC1)</option></select>
-    </label>
-    <label>Digital sensor is active high (disable for ground-active inputs)
-      <select id="activeHigh"><option value="0">Disabled (active when pulled to ground)</option><option value="1">Enabled (active high)</option></select>
-      <small>Disable for sensors activated by pulling GPIO3 or GPIO4 to ground. Selects the GPIO interrupt edge and internal pull resistor polarity.</small>
-    </label>
-    <label>Analog sensitivity around 1.65 V (mV)
-      <input id="sensitivity" type="number" min="20" max="1600" step="1">
-      <small>Detection is active when either calibrated sensor input differs from 1.65 V by at least this amount.</small>
-    </label>
     <label>Occupancy level (DALI arc power)
       <input id="occupancy" type="number" min="0" max="254" step="1">
       <small>DALI output level while local or radio occupancy is active.</small>
@@ -64,6 +53,23 @@
     <label>Fade-out duration (ms)
       <input id="fadeOut" type="number" min="0" max="60000" step="1">
       <small>Software fade duration when returning to the vacancy profile.</small>
+    </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Sensor mode</legend>
+    <div class="fields">
+    <label>Sensor input mode
+      <select id="sensorMode"><option value="0">Digital inputs with GPIO interrupts</option><option value="1">Two analog inputs (ESP32-C3 ADC1)</option></select>
+    </label>
+    <label>Digital sensor is active high (disable for ground-active inputs)
+      <select id="activeHigh"><option value="0">Disabled (active when pulled to ground)</option><option value="1">Enabled (active high)</option></select>
+      <small>Disable for sensors activated by pulling GPIO3 or GPIO4 to ground. Selects the GPIO interrupt edge and internal pull resistor polarity.</small>
+    </label>
+    <label>Analog sensitivity around 1.65 V (mV)
+      <input id="sensitivity" type="number" min="20" max="1600" step="1">
+      <small>Detection is active when either calibrated sensor input differs from 1.65 V by at least this amount.</small>
     </label>
     </div>
   </fieldset>
