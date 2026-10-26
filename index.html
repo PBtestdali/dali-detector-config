@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DALI Detector Configuration</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.45 system-ui, sans-serif; }
+    body { max-width: 820px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.5rem; }
+    fieldset { min-width: 0; margin: 1.2rem 0; padding: .8rem; }
+    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .8rem 1rem; }
+    label { display: grid; min-width: 0; align-content: start; gap: .25rem; }
+    small { opacity: .78; }
+    input, select, button { box-sizing: border-box; max-width: 100%; font: inherit; padding: .45rem; }
+    input, select { width: 100%; }
+    .actions { display: flex; gap: .7rem; flex-wrap: wrap; }
+    #status { min-height: 1.5em; margin: .8rem 0; }
+    .notice { opacity: .8; }
+  </style>
+</head>
+<body>
+  <h1>DALI Occupancy Detector Configuration</h1>
+  <p>The detector must be in configuration mode. The BLE connection is encrypted, and settings are saved to non-volatile storage.</p>
+  <div class="actions">
+    <button id="connect">Scan and connect</button>
+    <button id="read" disabled>Read settings</button>
+    <button id="save" disabled>Write and verify</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <p id="status" role="status" aria-live="polite">Not connected.</p>
+  <p id="device" class="notice"></p>
+
+  <fieldset>
+    <legend>DALI profile and sensor mode</legend>
+    <div class="fields">
+    <label>Sensor input mode
+      <select id="sensorMode"><option value="0">Digital inputs with GPIO interrupts</option><option value="1">Two analog inputs (ESP32-C3 ADC1)</option></select>
+    </label>
+    <label>Digital sensor is active high (disable for ground-active inputs)
+      <select id="activeHigh"><option value="0">Disabled (active when pulled to ground)</option><option value="1">Enabled (active high)</option></select>
+      <small>Disable for sensors activated by pulling GPIO3 or GPIO4 to ground. Selects the GPIO interrupt edge and internal pull resistor polarity.</small>
+    </label>
+    <label>Analog sensitivity around 1.65 V (mV)
+      <input id="sensitivity" type="number" min="20" max="1600" step="1">
+      <small>Detection is active when either calibrated sensor input differs from 1.65 V by at least this amount.</small>
+    </label>
+    <label>Occupancy level (DALI arc power)
+      <input id="occupancy" type="number" min="0" max="254" step="1">
+      <small>DALI output level while local or radio occupancy is active.</small>
+    </label>
+    <label>Vacancy level (DALI arc power)
+      <input id="vacancy" type="number" min="0" max="254" step="1">
+      <small>DALI output level after the hold time expires.</small>
+    </label>
+    <label>Fade-in duration (ms)
+      <input id="fadeIn" type="number" min="0" max="60000" step="1">
+      <small>Software fade duration when entering the occupancy profile.</small>
+    </label>
+    <label>Hold time (seconds)
+      <input id="hold" type="number" min="1" max="3600" step="1">
+      <small>Time to keep the occupancy profile after the last local or radio detection.</small>
+    </label>
+    <label>Fade-out duration (ms)
+      <input id="fadeOut" type="number" min="0" max="60000" step="1">
+      <small>Software fade duration when returning to the vacancy profile.</small>
+    </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>BLE radio</legend>
+    <div class="fields">
+    <label>Enable radio occupancy relay (BLE LE Coded)
+      <select id="radioEnabled"><option value="0">Disabled</option><option value="1">Enabled</option></select>
+      <small>Enables BLE coded occupancy relay and the PHY 1M configuration service.</small>
+    </label>
+    <label>Radio occupancy repeat period (ms)
+      <input id="radioRepeat" type="number" min="250" max="10000" step="1">
+      <small>Repeats the occupancy broadcast while a local sensor remains active.</small>
+    </label>
+    <label>Minimum peer RSSI (dBm)
+      <input id="minRssi" type="number" min="-110" max="-50" step="1">
+      <small>Median RSSI threshold for the first 15 valid occupancy advertisements received from each BLE address. Peers below this threshold are ignored until reboot.</small>
+    </label>
+    <label>BLE requested transmit power (dBm)
+      <input id="txPower" type="number" min="-12" max="20" step="1">
+      <small>Requested output power. The BLE controller may select a nearby supported value.</small>
+    </label>
+    </div>
+  </fieldset>
+
+  <p class="notice">After writing, the page reads the saved bytes back and compares them with the requested values. Operating and BLE settings are applied when the detector returns to normal mode. DALI transceiver GPIOs are fixed in the firmware and cannot be changed here.</p>
+
+  <script>
+    "use strict";
+    const SERVICE_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a901";
+    const SETTINGS_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a902";
+    const SETTINGS_LENGTH = 28;
+    const byId = id => document.getElementById(id);
+    const status = message => { byId("status").textContent = message; };
+    let device;
+    let characteristic;
+    let connectionInProgress = false;
+
+    function explainBleError(error) {
+      const message = error.message.toLowerCase();
+      if (message.includes("authentication")) {
+        return "BLE authentication/pairing failed. Forget this detector in the operating system's Bluetooth settings, then reconnect while it is in configuration mode.";
+      }
+      // A device that still holds keys from an erased or replaced detector fails
+      // encryption and drops the link right after connecting, without any prompt.
+      if (message.includes("disconnected")) {
+        return `${error.message} If this happens right after selecting the detector, this device probably keeps an old pairing: forget the detector in the Bluetooth settings (Android: also the "Bonded" tab of nRF Connect), then reconnect.`;
+      }
+      return error.message;
+    }
+
+    const fields = {
+      sensorMode: 1, activeHigh: 2, occupancy: 3, vacancy: 4,
+      fadeIn: 5, hold: 9, fadeOut: 13, sensitivity: 17,
+      radioEnabled: 21, radioRepeat: 22, minRssi: 26, txPower: 27
+    };
+    const limits = {
+      sensorMode: [0, 1], activeHigh: [0, 1], occupancy: [0, 254],
+      vacancy: [0, 254], fadeIn: [0, 60000], hold: [1, 3600],
+      fadeOut: [0, 60000], sensitivity: [20, 1600],
+      radioEnabled: [0, 1], radioRepeat: [250, 10000],
+      minRssi: [-110, -50], txPower: [-12, 20]
+    };
+    // DALI GPIO bytes (offsets 19-20) are not editable: they are sent back exactly
+    // as read, and the firmware rejects any change made over BLE.
+    let deviceGpio;
+
+    function parseSettings(buffer) {
+      if (buffer.byteLength !== SETTINGS_LENGTH) throw new Error(`Unexpected settings length: ${buffer.byteLength} bytes.`);
+      const view = new DataView(buffer);
+      if (view.getUint8(0) !== 1) throw new Error("Unsupported settings version.");
+      const values = {
+        sensorMode: view.getUint8(1), activeHigh: view.getUint8(2),
+        occupancy: view.getUint8(3), vacancy: view.getUint8(4),
+        fadeIn: view.getUint32(5, true), hold: view.getUint32(9, true),
+        fadeOut: view.getUint32(13, true), sensitivity: view.getUint16(17, true),
+        radioEnabled: view.getUint8(21), radioRepeat: view.getUint32(22, true),
+        minRssi: view.getInt8(26), txPower: view.getInt8(27)
+      };
+      deviceGpio = { tx: view.getUint8(19), rx: view.getUint8(20) };
+      for (const [id, value] of Object.entries(values)) byId(id).value = String(value);
+      return values;
+    }
+
+    function validateInput() {
+      const values = {};
+      for (const id of Object.keys(fields)) {
+        const element = byId(id);
+        const value = Number(element.value);
+        const [minimum, maximum] = limits[id];
+        if (element.value.trim() === "" || !Number.isInteger(value) ||
+            value < minimum || value > maximum) {
+          throw new Error(`Invalid value for "${element.labels[0].textContent.trim()}".`);
+        }
+        values[id] = value;
+      }
+      if (!deviceGpio) throw new Error("Read the settings from the detector before writing.");
+      return values;
+    }
+
+    function serializeSettings(values) {
+      const buffer = new ArrayBuffer(SETTINGS_LENGTH);
+      const view = new DataView(buffer);
+      view.setUint8(0, 1);
+      view.setUint8(1, values.sensorMode);
+      view.setUint8(2, values.activeHigh);
+      view.setUint8(3, values.occupancy);
+      view.setUint8(4, values.vacancy);
+      view.setUint32(5, values.fadeIn, true);
+      view.setUint32(9, values.hold, true);
+      view.setUint32(13, values.fadeOut, true);
+      view.setUint16(17, values.sensitivity, true);
+      view.setUint8(19, deviceGpio.tx);
+      view.setUint8(20, deviceGpio.rx);
+      view.setUint8(21, values.radioEnabled);
+      view.setUint32(22, values.radioRepeat, true);
+      view.setInt8(26, values.minRssi);
+      view.setInt8(27, values.txPower);
+      return buffer;
+    }
+
+    function setConnected(connected) {
+      byId("read").disabled = !connected;
+      byId("save").disabled = !connected;
+      byId("disconnect").disabled = !connected;
+    }
+
+    function handleDisconnected() {
+      characteristic = undefined;
+      setConnected(false);
+      if (!connectionInProgress) status("Déconnecté.");
+    }
+
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    // The first encrypted read triggers OS pairing; Windows can fail that read while
+    // pairing completes, so retry a few times before reporting an error.
+    async function readSettings() {
+      const attempts = 5;
+      for (let attempt = 1; ; attempt++) {
+        if (!characteristic) throw new Error("Detector disconnected (pairing rejected or failed).");
+        try {
+          const result = await characteristic.readValue();
+          parseSettings(result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength));
+          return;
+        } catch (error) {
+          if (attempt >= attempts || !device?.gatt?.connected) throw error;
+          status(`Pairing in progress (read attempt ${attempt}/${attempts} failed: ${error.message})…`);
+          await delay(1500);
+        }
+      }
+    }
+
+    byId("connect").addEventListener("click", async () => {
+      if (connectionInProgress) return;
+      if (!navigator.bluetooth) {
+        status("Web Bluetooth is not available in this browser or context.");
+        return;
+      }
+      if (device?.gatt?.connected) {
+        status("Already connected. Read settings or disconnect first.");
+        return;
+      }
+
+      connectionInProgress = true;
+      byId("connect").disabled = true;
+      let stage = "Bluetooth device selection";
+      try {
+        status("Scanning for nearby detectors…");
+        const selectedDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [SERVICE_UUID] }],
+          optionalServices: [SERVICE_UUID]
+        });
+        if (device && device !== selectedDevice) {
+          device.removeEventListener("gattserverdisconnected", handleDisconnected);
+        }
+        device = selectedDevice;
+        device.removeEventListener("gattserverdisconnected", handleDisconnected);
+        device.addEventListener("gattserverdisconnected", handleDisconnected);
+        byId("device").textContent = `Selected detector: ${device.name || "name unavailable"}`;
+        stage = "GATT connection";
+        status("Connecting to detector…");
+        const server = await device.gatt.connect();
+        stage = "DALI service discovery";
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        stage = "settings characteristic discovery";
+        characteristic = await service.getCharacteristic(SETTINGS_UUID);
+        setConnected(true);
+        stage = "settings read";
+        await readSettings();
+        status("Connected. Settings read.");
+      } catch (error) {
+        // Always release the link: the detector accepts a single connection and only
+        // resumes advertising after a disconnect.
+        if (device) {
+          device.removeEventListener("gattserverdisconnected", handleDisconnected);
+          if (device.gatt?.connected) device.gatt.disconnect();
+        }
+        characteristic = undefined;
+        setConnected(false);
+        status(`${stage} failed: ${explainBleError(error)}`);
+      } finally {
+        connectionInProgress = false;
+        byId("connect").disabled = false;
+      }
+    });
+
+    byId("read").addEventListener("click", async () => {
+      try {
+        await readSettings();
+        status("Settings read from the detector.");
+      } catch (error) {
+        status(`Read failed: ${explainBleError(error)}`);
+      }
+    });
+
+    byId("save").addEventListener("click", async () => {
+      try {
+        const expected = serializeSettings(validateInput());
+        const bytes = new Uint8Array(expected);
+        const firstChunk = new Uint8Array(17);
+        firstChunk[0] = 0;
+        firstChunk.set(bytes.slice(0, 16), 1);
+        const secondChunk = new Uint8Array(13);
+        secondChunk[0] = 16;
+        secondChunk.set(bytes.slice(16), 1);
+        await characteristic.writeValueWithResponse(firstChunk);
+        await characteristic.writeValueWithResponse(secondChunk);
+        await characteristic.writeValueWithResponse(Uint8Array.of(0xff));
+        const actual = await characteristic.readValue();
+        const actualBytes = new Uint8Array(actual.buffer, actual.byteOffset, actual.byteLength);
+        const expectedBytes = new Uint8Array(expected);
+        if (actualBytes.length !== expectedBytes.length ||
+            expectedBytes.some((value, index) => value !== actualBytes[index])) {
+          throw new Error("Read-back does not match the values sent.");
+        }
+        parseSettings(actual.buffer.slice(actual.byteOffset, actual.byteOffset + actual.byteLength));
+        status("Write acknowledged and verified by read-back.");
+      } catch (error) {
+        status(`Write not confirmed: ${explainBleError(error)}`);
+      }
+    });
+
+    byId("disconnect").addEventListener("click", () => {
+      if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+    });
+  </script>
+</body>
+</html>
