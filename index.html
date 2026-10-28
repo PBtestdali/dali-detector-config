@@ -17,6 +17,7 @@
     .actions { display: flex; gap: .7rem; flex-wrap: wrap; }
     #status { min-height: 1.5em; margin: .8rem 0; }
     .notice { opacity: .8; }
+    .step-title { grid-column: 1 / -1; margin: .6rem 0 0; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -53,6 +54,17 @@
     <label>Fade-out duration (s)
       <input id="fadeOut" type="number" min="0" max="60" step="1">
       <small>Software fade duration when returning to the vacancy profile.</small>
+    </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Night dimming steps</legend>
+    <p class="notice">Step times are virtual: 00:00 is the middle of the night, estimated from the power-on durations of the last 5 nights (12 h assumed before the first measured night). A step applies from its time until the next enabled step or power-off; before the first step, the DALI profile levels above apply. Enabled steps must be in chronological order.</p>
+    <div class="fields" id="nightFields">
+    <label>Midnight shift (min)
+      <select id="nightShift"></select>
+      <small>Moves the estimated middle of the night; a positive value moves every step later.</small>
     </label>
     </div>
   </fieldset>
@@ -102,13 +114,45 @@
     "use strict";
     const SERVICE_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a901";
     const SETTINGS_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a902";
-    const SETTINGS_LENGTH = 28;
-    const SETTINGS_VERSION = 2; // fades in seconds
+    const SETTINGS_LENGTH = 45;
+    const SETTINGS_VERSION = 3; // fades in seconds, night steps
+    const WRITE_CHUNK_SIZE = 16;
+    const NIGHT_STEP_COUNT = 4;
+    const NIGHT_SHIFT_OFFSET = 28;
+    const NIGHT_STEPS_OFFSET = 29;
+    const NIGHT_SLOT_MAX = 72; // 10-minute slots from 19:00 (0) to 07:00 (72)
     const byId = id => document.getElementById(id);
     const status = message => { byId("status").textContent = message; };
     let device;
     let characteristic;
     let connectionInProgress = false;
+
+    // Night step controls are generated: shift options, then one group per step.
+    const slotTime = slot => {
+      const minutes = (19 * 60 + slot * 10) % (24 * 60);
+      return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    };
+    for (let slots = -12; slots <= 12; slots++) {
+      byId("nightShift").add(new Option(`${slots > 0 ? "+" : ""}${slots * 10} min`, String(slots)));
+    }
+    for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+      const options = Array.from({ length: NIGHT_SLOT_MAX + 1 },
+        (_, slot) => `<option value="${slot}">${slotTime(slot)}</option>`).join("");
+      byId("nightFields").insertAdjacentHTML("beforeend", `
+    <p class="step-title">Step ${step}</p>
+    <label>Step ${step}
+      <select id="step${step}Enabled"><option value="0">Disabled</option><option value="1">Enabled</option></select>
+    </label>
+    <label>Step ${step} start time
+      <select id="step${step}Slot">${options}</select>
+    </label>
+    <label>Step ${step} vacancy level
+      <input id="step${step}Vacancy" type="number" min="0" max="254" step="1">
+    </label>
+    <label>Step ${step} occupancy level
+      <input id="step${step}Occupancy" type="number" min="0" max="254" step="1">
+    </label>`);
+    }
 
     function explainBleError(error) {
       const message = error.message.toLowerCase();
@@ -126,15 +170,27 @@
     const fields = {
       sensorMode: 1, activeHigh: 2, occupancy: 3, vacancy: 4,
       fadeIn: 5, hold: 9, fadeOut: 13, sensitivity: 17,
-      radioEnabled: 21, radioRepeat: 22, minRssi: 26, txPower: 27
+      radioEnabled: 21, radioRepeat: 22, minRssi: 26, txPower: 27,
+      nightShift: NIGHT_SHIFT_OFFSET
     };
     const limits = {
       sensorMode: [0, 1], activeHigh: [0, 1], occupancy: [0, 254],
       vacancy: [0, 254], fadeIn: [0, 60], hold: [1, 3600],
       fadeOut: [0, 60], sensitivity: [20, 1600],
       radioEnabled: [0, 1], radioRepeat: [250, 10000],
-      minRssi: [-127, -50], txPower: [-12, 20]
+      minRssi: [-127, -50], txPower: [-12, 20], nightShift: [-12, 12]
     };
+    for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+      const base = NIGHT_STEPS_OFFSET + (step - 1) * 4;
+      fields[`step${step}Enabled`] = base;
+      fields[`step${step}Slot`] = base + 1;
+      fields[`step${step}Vacancy`] = base + 2;
+      fields[`step${step}Occupancy`] = base + 3;
+      limits[`step${step}Enabled`] = [0, 1];
+      limits[`step${step}Slot`] = [0, NIGHT_SLOT_MAX];
+      limits[`step${step}Vacancy`] = [0, 254];
+      limits[`step${step}Occupancy`] = [0, 254];
+    }
     // DALI GPIO bytes (offsets 19-20) are not editable: they are sent back exactly
     // as read, and the firmware rejects any change made over BLE.
     let deviceGpio;
@@ -149,8 +205,14 @@
         fadeIn: view.getUint32(5, true), hold: view.getUint32(9, true),
         fadeOut: view.getUint32(13, true), sensitivity: view.getUint16(17, true),
         radioEnabled: view.getUint8(21), radioRepeat: view.getUint32(22, true),
-        minRssi: view.getInt8(26), txPower: view.getInt8(27)
+        minRssi: view.getInt8(26), txPower: view.getInt8(27),
+        nightShift: view.getInt8(NIGHT_SHIFT_OFFSET)
       };
+      for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+        for (const name of ["Enabled", "Slot", "Vacancy", "Occupancy"]) {
+          values[`step${step}${name}`] = view.getUint8(fields[`step${step}${name}`]);
+        }
+      }
       deviceGpio = { tx: view.getUint8(19), rx: view.getUint8(20) };
       for (const [id, value] of Object.entries(values)) byId(id).value = String(value);
       return values;
@@ -167,6 +229,15 @@
           throw new Error(`Invalid value for "${element.labels[0].textContent.trim()}".`);
         }
         values[id] = value;
+      }
+      let previous;
+      for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+        if (!values[`step${step}Enabled`]) continue;
+        if (previous && values[`step${step}Slot`] < values[`step${previous}Slot`]) {
+          byId(`step${step}Slot`).focus();
+          throw new Error(`Step ${step} starts before step ${previous}: enabled steps must be in chronological order.`);
+        }
+        previous = step;
       }
       if (!deviceGpio) throw new Error("Read the settings from the detector before writing.");
       return values;
@@ -190,6 +261,12 @@
       view.setUint32(22, values.radioRepeat, true);
       view.setInt8(26, values.minRssi);
       view.setInt8(27, values.txPower);
+      view.setInt8(NIGHT_SHIFT_OFFSET, values.nightShift);
+      for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+        for (const name of ["Enabled", "Slot", "Vacancy", "Occupancy"]) {
+          view.setUint8(fields[`step${step}${name}`], values[`step${step}${name}`]);
+        }
+      }
       return buffer;
     }
 
@@ -292,14 +369,14 @@
       try {
         const expected = serializeSettings(validateInput());
         const bytes = new Uint8Array(expected);
-        const firstChunk = new Uint8Array(17);
-        firstChunk[0] = 0;
-        firstChunk.set(bytes.slice(0, 16), 1);
-        const secondChunk = new Uint8Array(13);
-        secondChunk[0] = 16;
-        secondChunk.set(bytes.slice(16), 1);
-        await characteristic.writeValueWithResponse(firstChunk);
-        await characteristic.writeValueWithResponse(secondChunk);
+        // Chunks: [offset][up to 16 bytes] at offsets 0, 16, 32, then [0xFF] to commit.
+        for (let offset = 0; offset < bytes.length; offset += WRITE_CHUNK_SIZE) {
+          const data = bytes.slice(offset, offset + WRITE_CHUNK_SIZE);
+          const chunk = new Uint8Array(1 + data.length);
+          chunk[0] = offset;
+          chunk.set(data, 1);
+          await characteristic.writeValueWithResponse(chunk);
+        }
         await characteristic.writeValueWithResponse(Uint8Array.of(0xff));
         const actual = await characteristic.readValue();
         const actualBytes = new Uint8Array(actual.buffer, actual.byteOffset, actual.byteLength);
