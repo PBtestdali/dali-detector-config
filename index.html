@@ -18,6 +18,8 @@
     #status { min-height: 1.5em; margin: .8rem 0; }
     .notice { opacity: .8; }
     .step-title { grid-column: 1 / -1; margin: .6rem 0 0; font-weight: 600; }
+    .time-pair { display: flex; gap: .4rem; }
+    .time-pair select { flex: 1; }
   </style>
 </head>
 <body>
@@ -115,12 +117,14 @@
     const SERVICE_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a901";
     const SETTINGS_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a902";
     const SETTINGS_LENGTH = 45;
-    const SETTINGS_VERSION = 3; // fades in seconds, night steps
+    const SETTINGS_VERSION = 4; // fades in seconds, night steps in 15-minute slots
     const WRITE_CHUNK_SIZE = 16;
     const NIGHT_STEP_COUNT = 4;
     const NIGHT_SHIFT_OFFSET = 28;
     const NIGHT_STEPS_OFFSET = 29;
-    const NIGHT_SLOT_MAX = 72; // 10-minute slots from 19:00 (0) to 07:00 (72)
+    const NIGHT_SLOT_MINUTES = 15;
+    const NIGHT_SLOT_MAX = 48; // 15-minute slots from 19:00 (0) to 07:00 (48)
+    const NIGHT_SHIFT_SLOT_MAX = 8; // -120 to +120 min
     const byId = id => document.getElementById(id);
     const status = message => { byId("status").textContent = message; };
     let device;
@@ -128,23 +132,29 @@
     let connectionInProgress = false;
 
     // Night step controls are generated: shift options, then one group per step.
-    const slotTime = slot => {
-      const minutes = (19 * 60 + slot * 10) % (24 * 60);
-      return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-    };
-    for (let slots = -12; slots <= 12; slots++) {
-      byId("nightShift").add(new Option(`${slots > 0 ? "+" : ""}${slots * 10} min`, String(slots)));
+    // The start time is chosen with an hour and a minute list; the hidden stepNSlot
+    // field holds the slot sent to the detector (15-minute slots from 19:00).
+    const NIGHT_HOURS = [19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7];
+    const pad2 = value => String(value).padStart(2, "0");
+    const slotFromTime = (hour, minute) =>
+      ((hour * 60 + minute - 19 * 60 + 24 * 60) % (24 * 60)) / NIGHT_SLOT_MINUTES;
+    for (let slots = -NIGHT_SHIFT_SLOT_MAX; slots <= NIGHT_SHIFT_SLOT_MAX; slots++) {
+      byId("nightShift").add(new Option(`${slots > 0 ? "+" : ""}${slots * NIGHT_SLOT_MINUTES} min`, String(slots)));
     }
+    const hourOptions = NIGHT_HOURS.map(hour => `<option value="${hour}">${pad2(hour)} h</option>`).join("");
+    const minuteOptions = [0, 15, 30, 45].map(minute => `<option value="${minute}">${pad2(minute)} min</option>`).join("");
     for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
-      const options = Array.from({ length: NIGHT_SLOT_MAX + 1 },
-        (_, slot) => `<option value="${slot}">${slotTime(slot)}</option>`).join("");
       byId("nightFields").insertAdjacentHTML("beforeend", `
     <p class="step-title">Step ${step}</p>
     <label>Step ${step}
       <select id="step${step}Enabled"><option value="0">Disabled</option><option value="1">Enabled</option></select>
     </label>
     <label>Step ${step} start time
-      <select id="step${step}Slot">${options}</select>
+      <span class="time-pair">
+        <select id="step${step}Hour" aria-label="Step ${step} start hour">${hourOptions}</select>
+        <select id="step${step}Minute" aria-label="Step ${step} start minute">${minuteOptions}</select>
+      </span>
+      <input id="step${step}Slot" type="hidden">
     </label>
     <label>Step ${step} vacancy level
       <input id="step${step}Vacancy" type="number" min="0" max="254" step="1">
@@ -178,7 +188,8 @@
       vacancy: [0, 254], fadeIn: [0, 60], hold: [1, 3600],
       fadeOut: [0, 60], sensitivity: [20, 1600],
       radioEnabled: [0, 1], radioRepeat: [250, 10000],
-      minRssi: [-127, -50], txPower: [-12, 20], nightShift: [-12, 12]
+      minRssi: [-127, -50], txPower: [-12, 20],
+      nightShift: [-NIGHT_SHIFT_SLOT_MAX, NIGHT_SHIFT_SLOT_MAX]
     };
     for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
       const base = NIGHT_STEPS_OFFSET + (step - 1) * 4;
@@ -215,10 +226,24 @@
       }
       deviceGpio = { tx: view.getUint8(19), rx: view.getUint8(20) };
       for (const [id, value] of Object.entries(values)) byId(id).value = String(value);
+      for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+        const minutes = (19 * 60 + values[`step${step}Slot`] * NIGHT_SLOT_MINUTES) % (24 * 60);
+        byId(`step${step}Hour`).value = String(Math.floor(minutes / 60));
+        byId(`step${step}Minute`).value = String(minutes % 60);
+      }
       return values;
     }
 
     function validateInput() {
+      for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
+        const slot = slotFromTime(Number(byId(`step${step}Hour`).value),
+                                  Number(byId(`step${step}Minute`).value));
+        if (slot > NIGHT_SLOT_MAX) {
+          byId(`step${step}Minute`).focus();
+          throw new Error(`Step ${step} start time must be between 19:00 and 07:00.`);
+        }
+        byId(`step${step}Slot`).value = String(slot);
+      }
       const values = {};
       for (const id of Object.keys(fields)) {
         const element = byId(id);
@@ -234,7 +259,7 @@
       for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
         if (!values[`step${step}Enabled`]) continue;
         if (previous && values[`step${step}Slot`] < values[`step${previous}Slot`]) {
-          byId(`step${step}Slot`).focus();
+          byId(`step${step}Hour`).focus();
           throw new Error(`Step ${step} starts before step ${previous}: enabled steps must be in chronological order.`);
         }
         previous = step;
