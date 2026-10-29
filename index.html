@@ -65,8 +65,8 @@
     <p class="notice">Step times are virtual: 00:00 is the middle of the night, estimated from the power-on durations of the last 5 nights (12 h assumed before the first measured night). A step applies from its time until the next enabled step or power-off; before the first step, the DALI profile levels above apply. Enabled steps must be in chronological order.</p>
     <div class="fields" id="nightFields">
     <label>Midnight shift (min)
-      <select id="nightShift"></select>
-      <small>Moves the estimated middle of the night; a positive value moves every step later.</small>
+      <input id="nightShift" type="number" min="-120" max="120" step="1">
+      <small>-120 to +120. Moves the estimated middle of the night; a positive value moves every step later.</small>
     </label>
     </div>
   </fieldset>
@@ -117,14 +117,14 @@
     const SERVICE_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a901";
     const SETTINGS_UUID = "4d8f0001-6a1b-4c2a-9d51-776f00d1a902";
     const SETTINGS_LENGTH = 45;
-    const SETTINGS_VERSION = 4; // fades in seconds, night steps in 15-minute slots
+    const SETTINGS_VERSION = 5; // fades in seconds, night steps in 15-minute slots, shift in minutes
     const WRITE_CHUNK_SIZE = 16;
     const NIGHT_STEP_COUNT = 4;
     const NIGHT_SHIFT_OFFSET = 28;
     const NIGHT_STEPS_OFFSET = 29;
     const NIGHT_SLOT_MINUTES = 15;
     const NIGHT_SLOT_MAX = 48; // 15-minute slots from 19:00 (0) to 07:00 (48)
-    const NIGHT_SHIFT_SLOT_MAX = 8; // -120 to +120 min
+    const NIGHT_SHIFT_MAX_MIN = 120;
     const byId = id => document.getElementById(id);
     const status = message => { byId("status").textContent = message; };
     let device;
@@ -138,9 +138,6 @@
     const pad2 = value => String(value).padStart(2, "0");
     const slotFromTime = (hour, minute) =>
       ((hour * 60 + minute - 19 * 60 + 24 * 60) % (24 * 60)) / NIGHT_SLOT_MINUTES;
-    for (let slots = -NIGHT_SHIFT_SLOT_MAX; slots <= NIGHT_SHIFT_SLOT_MAX; slots++) {
-      byId("nightShift").add(new Option(`${slots > 0 ? "+" : ""}${slots * NIGHT_SLOT_MINUTES} min`, String(slots)));
-    }
     const hourOptions = NIGHT_HOURS.map(hour => `<option value="${hour}">${pad2(hour)} h</option>`).join("");
     const minuteOptions = [0, 15, 30, 45].map(minute => `<option value="${minute}">${pad2(minute)} min</option>`).join("");
     for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
@@ -189,7 +186,7 @@
       fadeOut: [0, 60], sensitivity: [20, 1600],
       radioEnabled: [0, 1], radioRepeat: [250, 10000],
       minRssi: [-127, -50], txPower: [-12, 20],
-      nightShift: [-NIGHT_SHIFT_SLOT_MAX, NIGHT_SHIFT_SLOT_MAX]
+      nightShift: [-NIGHT_SHIFT_MAX_MIN, NIGHT_SHIFT_MAX_MIN]
     };
     for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
       const base = NIGHT_STEPS_OFFSET + (step - 1) * 4;
