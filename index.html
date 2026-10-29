@@ -110,7 +110,8 @@
     </div>
   </fieldset>
 
-  <p class="notice">After writing, the page reads the saved bytes back and compares them with the requested values. Operating and BLE settings are applied when the detector returns to normal mode. DALI transceiver GPIOs are fixed in the firmware and cannot be changed here.</p>
+  <p class="notice">After writing, the page reads the saved bytes back and compares them with the requested values. Operating and BLE settings are applied when the detector returns to normal mode.</p>
+  <p class="notice">After each successful write, the luminaire previews the new DALI profile: vacancy level for 1 s, fade-in to the occupancy level, 2 s hold, fade-out to the vacancy level, 2 s hold. It then resumes flashing while connected. A new connection stops the preview; a new write restarts it.</p>
 
   <script>
     "use strict";
