@@ -35,7 +35,7 @@
   <p id="device" class="notice"></p>
 
   <fieldset>
-    <legend>DALI profile</legend>
+    <legend>DALI profile (step 1)</legend>
     <div class="fields">
     <label>Occupancy level (DALI arc power)
       <input id="occupancy" type="number" min="0" max="254" step="1">
@@ -62,7 +62,7 @@
 
   <fieldset>
     <legend>Night dimming steps</legend>
-    <p class="notice">Step times are virtual: 00:00 is the middle of the night, estimated from the power-on durations of the last 5 nights (12 h assumed before the first measured night). A step applies from its time until the next enabled step or power-off; before the first step, the DALI profile levels above apply. Enabled steps must be in chronological order.</p>
+    <p class="notice">Step times are virtual: 00:00 is the middle of the night, estimated from the power-on durations of the last 5 nights (12 h assumed before the first measured night). A step applies from its time until the next enabled step or power-off; before the first enabled step, the DALI profile above (step 1) applies. Enabled steps must be in chronological order.</p>
     <div class="fields" id="nightFields">
     <label>Midnight shift (min)
       <input id="nightShift" type="number" min="-120" max="120" step="1">
@@ -143,21 +143,21 @@
     const minuteOptions = [0, 15, 30, 45].map(minute => `<option value="${minute}">${pad2(minute)} min</option>`).join("");
     for (let step = 1; step <= NIGHT_STEP_COUNT; step++) {
       byId("nightFields").insertAdjacentHTML("beforeend", `
-    <p class="step-title">Step ${step}</p>
-    <label>Step ${step}
+    <p class="step-title">Step ${step + 1}</p>
+    <label>Step ${step + 1}
       <select id="step${step}Enabled"><option value="0">Disabled</option><option value="1">Enabled</option></select>
     </label>
-    <label>Step ${step} start time
+    <label>Step ${step + 1} start time
       <span class="time-pair">
-        <select id="step${step}Hour" aria-label="Step ${step} start hour">${hourOptions}</select>
-        <select id="step${step}Minute" aria-label="Step ${step} start minute">${minuteOptions}</select>
+        <select id="step${step}Hour" aria-label="Step ${step + 1} start hour">${hourOptions}</select>
+        <select id="step${step}Minute" aria-label="Step ${step + 1} start minute">${minuteOptions}</select>
       </span>
       <input id="step${step}Slot" type="hidden">
     </label>
-    <label>Step ${step} vacancy level
+    <label>Step ${step + 1} vacancy level
       <input id="step${step}Vacancy" type="number" min="0" max="254" step="1">
     </label>
-    <label>Step ${step} occupancy level
+    <label>Step ${step + 1} occupancy level
       <input id="step${step}Occupancy" type="number" min="0" max="254" step="1">
     </label>`);
     }
@@ -238,7 +238,7 @@
                                   Number(byId(`step${step}Minute`).value));
         if (slot > NIGHT_SLOT_MAX) {
           byId(`step${step}Minute`).focus();
-          throw new Error(`Step ${step} start time must be between 19:00 and 07:00.`);
+          throw new Error(`Step ${step + 1} start time must be between 19:00 and 07:00.`);
         }
         byId(`step${step}Slot`).value = String(slot);
       }
@@ -258,7 +258,7 @@
         if (!values[`step${step}Enabled`]) continue;
         if (previous && values[`step${step}Slot`] < values[`step${previous}Slot`]) {
           byId(`step${step}Hour`).focus();
-          throw new Error(`Step ${step} starts before step ${previous}: enabled steps must be in chronological order.`);
+          throw new Error(`Step ${step + 1} starts before step ${previous + 1}: enabled steps must be in chronological order.`);
         }
         previous = step;
       }
